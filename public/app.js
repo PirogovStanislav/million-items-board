@@ -25,7 +25,12 @@ const panels = Object.fromEntries(sides.map((side) => {
 let busyCount = 0;
 let stateRevision = -1;
 let drag = null;
+let initialLoadLogged = false;
 const pendingIds = new Set();
+
+function diagnostic(message, details, level = 'info') {
+  console[level](`[Million Items Board] ${message}`, details);
+}
 
 function updateStatus() {
   const busy = busyCount > 0 || sides.some((side) => panels[side].requests.size > 0);
@@ -103,6 +108,8 @@ async function fetchPage(side, offset) {
   const request = (async () => {
     try {
       const params = new URLSearchParams({ side, q: panel.query, offset: String(offset), limit: '20' });
+      const startedAt = performance.now();
+      diagnostic('Загрузка страницы', { panel: side, offset, limit: PAGE_SIZE, filterActive: Boolean(panel.query) });
       const page = await api(`/api/items?${params}`, { signal });
       if (generation !== panel.generation) return;
       if (panel.revision !== null && page.revision !== panel.revision) {
@@ -117,11 +124,23 @@ async function fetchPage(side, offset) {
       panel.failed = false;
       remember(panel, offset, page.items);
       updateCounts(page.state);
+      diagnostic('Страница загружена', {
+        panel: side, offset: page.offset, received: page.items.length, total: page.total,
+        revision: page.revision, elapsedMs: Math.round(performance.now() - startedAt),
+      });
       render(side);
+      if (!initialLoadLogged && sides.every((name) => panels[name].loaded)) {
+        initialLoadLogged = true;
+        diagnostic('Обе панели загружены', {
+          initialCount: page.state.initialCount, selectedCount: page.state.selectedCount,
+          availableCount: page.state.availableCount, revision: page.state.revision,
+        });
+      }
       requestVisible(side);
     } catch (error) {
       if (error.name !== 'AbortError' && generation === panel.generation) {
         panel.failed = true;
+        diagnostic('Не удалось загрузить страницу', { panel: side, offset, error: error.message }, 'error');
         toast(error.message, true);
         panel.meta.textContent = 'Не удалось загрузить. Нажмите «Повторить».';
       }
@@ -247,8 +266,11 @@ async function waitForOperation(id) {
   while (Date.now() < deadline) {
     // Чтение статуса тоже ждёт секундного батча; не считаем HTTP 202 выполненной операцией.
     const operation = await api(`/api/operations/${encodeURIComponent(id)}`);
-    if (operation.status === 'applied') return;
-    if (operation.status === 'rejected') throw new Error(operation.error);
+    if (operation.status === 'applied') return operation;
+    if (operation.status === 'rejected') {
+      diagnostic('Сервер отклонил операцию', { operationId: id, error: operation.error }, 'warn');
+      throw new Error(operation.error);
+    }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error('Операция ещё обрабатывается. Обновите список позже.');
@@ -265,16 +287,35 @@ async function mutate(url, payload, method = 'POST') {
   busyCount += 1;
   sides.forEach(render);
   updateStatus();
+  const action = url === '/api/items' ? 'добавление' : url.endsWith('/move') ? 'сортировка'
+    : method === 'DELETE' ? 'снятие выбора' : 'выбор';
+  const startedAt = performance.now();
   try {
+    diagnostic('Отправка операции', { action, method, endpoint: url });
     const result = await api(url, {
       method, body: JSON.stringify(payload), headers: { 'Idempotency-Key': crypto.randomUUID() },
     });
+    diagnostic('Операция принята сервером', {
+      action, operationId: result.operationId, status: result.status,
+      deduplicated: result.deduplicated, batchIntervalMs: result.batchIn,
+    });
     if (url === '/api/items') toast(`ID ${payload.id} сохраняется. Это займёт до 10 секунд.`);
-    await waitForOperation(result.operationId);
+    const operation = await waitForOperation(result.operationId);
+    diagnostic('Операция выполнена сервером', {
+      action, operationId: operation.id, revision: operation.revision,
+      elapsedMs: Math.round(performance.now() - startedAt),
+    });
     await reloadLists();
+    if (sides.every((side) => panels[side].loaded && !panels[side].failed)) {
+      diagnostic('Списки обновлены после операции', { operationId: operation.id, revision: stateRevision });
+    }
     if (url === '/api/items') toast(`ID ${payload.id} добавлен. Найти его можно через фильтр.`);
     return true;
-  } catch (error) { toast(error.message, true); return false; }
+  } catch (error) {
+    diagnostic('Ошибка запроса или ожидания операции', { action, error: error.message }, 'error');
+    toast(error.message, true);
+    return false;
+  }
   finally {
     pendingIds.delete(payload.id);
     busyCount -= 1;
@@ -367,6 +408,7 @@ document.querySelector('#add-form').addEventListener('submit', async (event) => 
   if (await mutate('/api/items', { id }) && input.value.trim() === id) input.value = '';
 });
 
+diagnostic('Инициализация интерфейса', { pageSize: PAGE_SIZE, cachedPagesPerPanel: CACHE_PAGES });
 for (const side of sides) {
   const panel = panels[side];
   // Сбрасываем фильтр явно, даже если браузер восстановил значения полей после обновления.
