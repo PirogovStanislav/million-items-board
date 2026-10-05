@@ -1,0 +1,19 @@
+{
+  "name": "million-items-board",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A server-backed board for selecting and reordering one million items.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test test/*.test.js",
+    "check": "node --check src/server.js && node --check src/app.js && node --check src/batcher.js && node --check src/store.js && node --check src/filter-index.js && node --check src/filter-worker.js && node --check public/app.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}

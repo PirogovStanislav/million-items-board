@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: million-items-board
+    runtime: node
+    buildCommand: npm ci
+    startCommand: npm start
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
