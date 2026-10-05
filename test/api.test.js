@@ -27,6 +27,20 @@ async function setup(t, options = {}) {
   return { ...runtime, base, request, wait };
 }
 
+test('favicon is linked from HTML and the legacy URL redirects to the SVG', async (t) => {
+  const { base } = await setup(t, { initialCount: 20 });
+  const html = await fetch(base);
+  assert.equal(html.status, 200);
+  assert.match(await html.text(), /rel="icon"[^>]*href="\/favicon\.svg"/);
+  const legacy = await fetch(`${base}/favicon.ico`, { redirect: 'manual' });
+  assert.equal(legacy.status, 302);
+  assert.equal(legacy.headers.get('location'), '/favicon.svg');
+  const icon = await fetch(`${base}/favicon.ico`);
+  assert.equal(icon.status, 200);
+  assert.match(icon.headers.get('content-type'), /^image\/svg\+xml/);
+  assert.match(await icon.text(), /^<svg\s/);
+});
+
 test('production cadence: data reads every second and additions every ten seconds', async (t) => {
   const { batcher, request, wait } = await setup(t);
   const start = batcher.lastAddAt;

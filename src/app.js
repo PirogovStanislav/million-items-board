@@ -75,6 +75,7 @@ function createApp(options = {}) {
     enqueue(req, res, 'move', { id, targetId, position, query: queryValue(req.body?.query) });
   });
   app.use('/api', (_req, _res, next) => next(new ApiError(404, 'Маршрут не найден.')));
+  app.get('/favicon.ico', (_req, res) => res.redirect(302, '/favicon.svg'));
   app.use(express.static(path.join(__dirname, '..', 'public')));
   app.use((_req, _res, next) => next(new ApiError(404, 'Страница не найдена.')));
   app.use((error, _req, res, _next) => {
