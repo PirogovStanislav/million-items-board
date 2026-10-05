@@ -8,6 +8,7 @@ class FilterIndex {
     this.waiters = new Map();
     this.cacheSize = cacheSize;
     this.nextId = 1;
+    // Полный поиск по диапазону выносим в поток, чтобы не блокировать Express.
     this.worker = new Worker(path.join(__dirname, 'filter-worker.js'), { workerData: { initialCount } });
     this.worker.on('message', ({ requestId, ids }) => {
       const waiter = this.waiters.get(requestId);
@@ -32,6 +33,7 @@ class FilterIndex {
   get(query) {
     if (this.error) return Promise.reject(this.error);
     if (this.cache.has(query)) {
+      // Перенос в конец Map обновляет порядок LRU при попадании в кэш.
       const ids = this.cache.get(query);
       this.cache.delete(query);
       this.cache.set(query, ids);

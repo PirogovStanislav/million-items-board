@@ -65,6 +65,7 @@ function updateCounts(state) {
 function reset(side, preserveScroll = false) {
   const panel = panels[side];
   const scrollTop = preserveScroll ? panel.viewport.scrollTop : 0;
+  // Отменяем старую загрузку; generation также защищает от уже пришедшего устаревшего ответа.
   panel.controller.abort();
   panel.controller = new AbortController();
   panel.generation += 1;
@@ -105,7 +106,7 @@ async function fetchPage(side, offset) {
       const page = await api(`/api/items?${params}`, { signal });
       if (generation !== panel.generation) return;
       if (panel.revision !== null && page.revision !== panel.revision) {
-        // Another user changed the common state; discard pages of the old revision.
+        // Другой клиент изменил общее состояние: страницы разных ревизий смешивать нельзя.
         reset(side, true);
         requestVisible(side);
         return;
@@ -143,6 +144,7 @@ async function fetchPage(side, offset) {
 function trackHeight(panel) { return Math.min(panel.total * ROW_HEIGHT, MAX_TRACK_HEIGHT); }
 
 function logicalScroll(panel) {
+  // Сжатая высота трека позволяет достичь миллионной строки без огромного DOM-контейнера.
   const physicalRange = Math.max(1, trackHeight(panel) - panel.viewport.clientHeight);
   const logicalRange = Math.max(0, panel.total * ROW_HEIGHT - panel.viewport.clientHeight);
   return panel.viewport.scrollTop * logicalRange / physicalRange;
@@ -183,6 +185,7 @@ function render(side) {
   panel.list.style.top = `${panel.viewport.scrollTop + start * ROW_HEIGHT - logicalScroll(panel)}px`;
   const focusId = panel.list.contains(document.activeElement) ? document.activeElement.closest('[data-id]')?.dataset.id : null;
   const fragment = document.createDocumentFragment();
+  // В DOM держим окно максимум из 20 строк, независимо от глубины прокрутки и фильтра.
   for (let index = start; index < Math.min(panel.total, start + PAGE_SIZE); index += 1) {
     const offset = Math.floor(index / PAGE_SIZE) * PAGE_SIZE;
     const id = panel.pages.get(offset)?.[index - offset];
@@ -225,6 +228,7 @@ function createRow(side, id) {
   }
   const label = document.createElement('span');
   label.className = 'item-id';
+  // Произвольный ID выводим как текст, чтобы он не интерпретировался как HTML.
   label.textContent = id;
   row.append(label);
   const action = document.createElement('button');
@@ -241,7 +245,7 @@ function createRow(side, id) {
 async function waitForOperation(id) {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
-    // The server holds status reads until its next 1-second batch.
+    // Чтение статуса тоже ждёт секундного батча; не считаем HTTP 202 выполненной операцией.
     const operation = await api(`/api/operations/${encodeURIComponent(id)}`);
     if (operation.status === 'applied') return;
     if (operation.status === 'rejected') throw new Error(operation.error);
@@ -283,6 +287,7 @@ function beginDrag(event, id) {
   if (event.button !== 0 || pendingIds.has(id)) return;
   const viewport = panels.selected.viewport;
   drag = { id, pointerId: event.pointerId, startY: event.clientY, x: event.clientX, y: event.clientY, active: false, targetId: null };
+  // Захватываем указатель на viewport: строки могут пересоздаваться во время автопрокрутки.
   viewport.setPointerCapture(event.pointerId);
   event.preventDefault();
 }
@@ -317,6 +322,7 @@ function finishDrag(event, cancelled = false) {
   if (panels.selected.viewport.hasPointerCapture(event.pointerId)) panels.selected.viewport.releasePointerCapture(event.pointerId);
   render('selected');
   if (!cancelled && saved.active && saved.targetId) {
+    // Отправляем ID и фильтр, а не индексы видимой страницы: порядок определяет сервер.
     mutate('/api/selected/move', { id: saved.id, targetId: saved.targetId, position: saved.position, query: panels.selected.query });
   }
 }
@@ -363,7 +369,7 @@ document.querySelector('#add-form').addEventListener('submit', async (event) => 
 
 for (const side of sides) {
   const panel = panels[side];
-  // Explicit reset prevents browser form restoration from persisting a filter.
+  // Сбрасываем фильтр явно, даже если браузер восстановил значения полей после обновления.
   panel.filter.value = '';
   let debounce;
   let frame;
@@ -374,8 +380,8 @@ for (const side of sides) {
   });
   panel.viewport.addEventListener('scroll', () => {
     const delta = panel.viewport.scrollTop - panel.lastScroll;
-    // Native wheel, touch and focus scrolling use row pixels. Only long scrollbar
-    // jumps use the compressed range needed to reach all one million rows.
+    // Колесо, касания и фокус двигаются в пикселях строк; большие скачки полосы прокрутки
+    // используют сжатый диапазон, чтобы можно было добраться до миллионной строки.
     if (panel.total * ROW_HEIGHT > MAX_TRACK_HEIGHT && Math.abs(delta) < panel.viewport.clientHeight * 2) {
       setLogicalScroll(panel, panel.lastLogicalScroll + delta);
     } else {

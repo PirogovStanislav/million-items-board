@@ -40,6 +40,7 @@ class Batcher {
     let duplicate;
     if (type === 'add') {
       if (this.store.exists(payload.id)) throw new ApiError(409, 'Элемент с таким ID уже существует.');
+      // Резервируем ID до десятисекундного батча: повторы получат ту же операцию.
       duplicate = this.adds.get(payload.id);
     } else if (type === 'select' || type === 'unselect') {
       const reservation = this.selectionReservations.get(payload.id);
@@ -58,6 +59,7 @@ class Batcher {
     if (key) this.idempotency.set(key, { signature, operationId: operation.id });
     if (type === 'add') this.adds.set(payload.id, operation);
     else {
+      // Противоположные действия сохраняем в FIFO, иначе select → unselect → select потеряет порядок.
       this.mutations.push(operation);
       this.lastMutation = operation;
       if (type === 'select' || type === 'unselect') this.selectionReservations.set(payload.id, operation);
@@ -68,6 +70,7 @@ class Batcher {
   read(key, compute, filterQuery = null) {
     if (this.closed) return Promise.reject(new ApiError(503, 'Сервер останавливается.'));
     if (this.reads.has(key)) {
+      // Одно вычисление и один Promise на одинаковые чтения внутри очереди.
       this.stats.readsDeduplicated += 1;
       return this.reads.get(key).promise;
     }
@@ -101,6 +104,7 @@ class Batcher {
       this.stats.batches += 1;
       this.prune(now);
       if (now - this.lastAddAt >= this.addIntervalMs) {
+        // Интервал отсчитывается от старта планировщика, а не от каждого запроса.
         this.lastAddAt = now;
         for (const operation of this.adds.values()) this.apply(operation);
         this.adds.clear();
@@ -112,6 +116,7 @@ class Batcher {
         const operation = mutations[index];
         this.apply(operation);
         if (this.selectionReservations.get(operation.payload.id) === operation) this.selectionReservations.delete(operation.payload.id);
+        // Уступаем цикл событий, чтобы сервер принимал новые запросы во время большого батча.
         if (index % 16 === 15) await new Promise(setImmediate);
         if (Date.now() - started > 200) {
           this.mutations.unshift(...mutations.slice(index + 1));
@@ -121,7 +126,7 @@ class Batcher {
       this.lastMutation = this.mutations.at(-1) || null;
       const reads = [];
       const filters = new Set();
-      // Bound expensive cold filters per tick; excess requests remain queued.
+      // Ограничиваем дорогие холодные фильтры за один тик; остальные чтения остаются в очереди.
       for (const [key, read] of this.reads) {
         if (reads.length >= 256) break;
         if (read.filterQuery && !filters.has(read.filterQuery) && filters.size >= 8) continue;
@@ -129,8 +134,8 @@ class Batcher {
         reads.push(read);
         this.reads.delete(key);
       }
-      // Writes are held while asynchronous views are calculated; every read in this
-      // batch observes the same revision. New requests wait for the next tick.
+      // Пока считаются асинхронные страницы, следующий flush не меняет состояние.
+      // Все чтения батча получают одну ревизию, новые запросы ждут следующего тика.
       await Promise.all(reads.map(async ({ compute, resolve, reject }) => {
         try {
           this.stats.readsComputed += 1;

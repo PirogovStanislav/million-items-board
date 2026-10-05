@@ -11,6 +11,7 @@ function queryValue(value) {
 
 function createApp(options = {}) {
   const app = express();
+  // Один Store на процесс: все клиенты видят общий выбор и порядок до перезапуска сервера.
   const store = new Store(options.initialCount);
   const batcher = new Batcher(store, options);
   let activeRequests = 0;
@@ -57,6 +58,7 @@ function createApp(options = {}) {
     const key = req.get('Idempotency-Key');
     if (key && (key.length > 100 || !/^[\w.-]+$/.test(key))) throw new ApiError(400, 'Некорректный Idempotency-Key.');
     const operation = batcher.enqueue(type, payload, key);
+    // 202 подтверждает постановку в очередь, но не успех: результат доступен по operationId.
     res.status(202).json({
       operationId: operation.id, status: operation.status, deduplicated: Boolean(operation.deduplicated),
       batchIn: type === 'add' ? batcher.addIntervalMs : batcher.intervalMs,

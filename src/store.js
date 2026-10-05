@@ -14,7 +14,7 @@ function normalizeId(value) {
   return id;
 }
 
-// Number of entries <= value in a sorted array.
+// Количество значений <= value в отсортированном массиве.
 function upperBound(values, value) {
   let left = 0;
   let right = values.length;
@@ -28,6 +28,7 @@ function upperBound(values, value) {
 
 class Store {
   constructor(initialCount = 1_000_000) {
+    // Исходные ID представлены диапазоном, а не миллионом объектов в памяти.
     this.initialCount = initialCount;
     this.custom = new Set();
     this.selected = [];
@@ -46,6 +47,7 @@ class Store {
   changed() { this.revision += 1; this.views.clear(); }
 
   add(id) {
+    // Повторная проверка при применении: проверка на входе API сама по себе недостаточна.
     if (this.exists(id)) throw new ApiError(409, 'Элемент с таким ID уже существует.');
     this.custom.add(id);
     this.changed();
@@ -78,6 +80,7 @@ class Store {
       this.changed();
       return;
     }
+    // При фильтре меняем только совпавшие ID в их слотах; скрытые элементы остаются на месте.
     const slots = [];
     const visible = [];
     for (let index = 0; index < this.selected.length; index += 1) {
@@ -109,6 +112,7 @@ class Store {
       this.views.set(key, view);
       return view;
     }
+    // Параллельные страницы одного фильтра используют общее представление списка.
     if (this.pendingViews.has(key)) return this.pendingViews.get(key);
     const promise = (async () => {
       const initial = side === 'available' && query ? await this.filterIndex.get(query) : null;
@@ -143,7 +147,7 @@ class Store {
       total = availableInitial + custom.length;
       items = [];
       if (offset < availableInitial) {
-        // Find the offset-th available ID without scanning all previous pages.
+        // Бинарный поиск находит начало глубокой страницы без прохода по предыдущим.
         let low = 0;
         let high = baseCount;
         while (low < high) {
@@ -158,6 +162,7 @@ class Store {
           if (!this.selectedSet.has(id)) items.push(id);
         }
       }
+      // Пользовательские ID идут после исходного диапазона и могут заполнить остаток страницы.
       const customOffset = Math.max(0, offset - availableInitial);
       items.push(...custom.slice(customOffset, customOffset + 20 - items.length));
     }

@@ -6,5 +6,6 @@ parentPort.on('message', ({ requestId, query }) => {
     if (String(id).includes(query)) matches.push(id);
   }
   const ids = Uint32Array.from(matches);
+  // Передаём буфер потоку сервера без копирования массива найденных ID.
   parentPort.postMessage({ requestId, ids }, [ids.buffer]);
 });
